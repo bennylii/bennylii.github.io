@@ -196,7 +196,7 @@
     </span>
       <header class="post-header">
         <h2 class="post-title" itemprop="name headline">
-          <a href="/2026/05/05/windows-dev-debugging/" class="post-title-link" itemprop="url">Windows 开发环境连环坑：Gradle、IPv6、内存三板斧</a>
+          <a href="/2026/05/05/windows-dev-debugging/" class="post-title-link" itemprop="url">Windows 开发环境的三个坑：Gradle OOM、ES 内存、localhost 连不上 PostgreSQL</a>
         </h2>
 
         <div class="post-meta-container">
@@ -214,7 +214,7 @@
         <i class="far fa-calendar-check"></i>
       </span>
       <span class="post-meta-item-text">更新于</span>
-      <time title="修改时间：2026-05-04 19:29:23" itemprop="dateModified" datetime="2026-05-04T19:29:23+00:00">2026-05-04</time>
+      <time title="修改时间：2026-05-04 19:33:17" itemprop="dateModified" datetime="2026-05-04T19:33:17+00:00">2026-05-04</time>
     </span>
 
   
@@ -227,35 +227,9 @@
     
     
     <div class="post-body" itemprop="articleBody">
-          <blockquote>
-<p>一个全栈项目的 Windows 开发环境，8 个服务接连出问题。本文复盘整个排查链路，从”为什么 Gradle 随机挂”到”为什么 localhost 连不上 localhost”。</p>
-</blockquote>
-<h2 id="背景"><a href="#背景" class="headerlink" title="背景"></a>背景</h2><p>项目 dev 环境需要启动 8 个服务：</p>
-<table>
-<thead>
-<tr>
-<th>层</th>
-<th>服务</th>
-<th>端口</th>
-</tr>
-</thead>
-<tbody><tr>
-<td>基础设施</td>
-<td>MongoDB, Redis, Elasticsearch, PostgreSQL</td>
-<td>27017, 6379, 9200, 5432</td>
-</tr>
-<tr>
-<td>后端</td>
-<td>Kotlin (Ktor&#x2F;Gradle), Go Auth</td>
-<td>8081, 8080</td>
-</tr>
-<tr>
-<td>前端</td>
-<td>Main (Vite), Auth (Vite)</td>
-<td>5173, 5174</td>
-</tr>
-</tbody></table>
-<p>用一台 Windows 10 工作站做本地开发，16GB 内存。启动脚本 <code>start-all.bat</code> 依次拉起所有服务然后健康检查。</p>
+          <p>事情很简单：每天早上敲一个命令把开发环境拉起来。项目结构不复杂——一个 Kotlin 写的主后端，一个 Go 写的用户认证服务，前端是两个 Vite 项目，底下垫着 MongoDB、Redis、Elasticsearch、PostgreSQL 四个基础设施。加起来 8 个进程。</p>
+<p>我写了一个 <code>start-all.bat</code>，预期行为是：双击 → 等服务一个个亮绿灯 → 打开浏览器干活。</p>
+<p>结果实际行为是：有的服务随机消失，有的端口不通，前台报错信息指向和根因毫无关系。以下是在 Windows 10 + 16GB 内存上调试这 8 个进程启动问题的记录。</p>
           <!--noindex-->
             <div class="post-button">
               <a class="btn" href="/2026/05/05/windows-dev-debugging/#more" rel="contents">
@@ -325,7 +299,7 @@
         <i class="far fa-calendar-check"></i>
       </span>
       <span class="post-meta-item-text">更新于</span>
-      <time title="修改时间：2026-05-04 19:29:23" itemprop="dateModified" datetime="2026-05-04T19:29:23+00:00">2026-05-04</time>
+      <time title="修改时间：2026-05-04 19:33:17" itemprop="dateModified" datetime="2026-05-04T19:33:17+00:00">2026-05-04</time>
     </span>
 
   
