@@ -144,7 +144,7 @@
       </div>
       <div class="site-state-item site-state-tags">
           <a href="/tags/">
-        <span class="site-state-item-count">8</span>
+        <span class="site-state-item-count">10</span>
         <span class="site-state-item-name">标签</span></a>
       </div>
   </nav>
@@ -196,7 +196,7 @@
     </span>
       <header class="post-header">
         <h2 class="post-title" itemprop="name headline">
-          <a href="/2026/05/05/windows-dev-debugging/" class="post-title-link" itemprop="url">Windows 开发环境的三个坑：Gradle OOM、ES 内存、localhost 连不上 PostgreSQL</a>
+          <a href="/2026/05/05/windows-dev-debugging/" class="post-title-link" itemprop="url">Windows 开发环境的四个坑：Gradle OOM、ES 内存、localhost 连不上 PostgreSQL、bat 改 ps1</a>
         </h2>
 
         <div class="post-meta-container">
@@ -207,14 +207,14 @@
       </span>
       <span class="post-meta-item-text">发表于</span>
 
-      <time title="创建时间：2026-05-05 03:30:00" itemprop="dateCreated datePublished" datetime="2026-05-05T03:30:00+00:00">2026-05-05</time>
+      <time title="创建时间：2026-05-05 04:30:00" itemprop="dateCreated datePublished" datetime="2026-05-05T04:30:00+00:00">2026-05-05</time>
     </span>
     <span class="post-meta-item">
       <span class="post-meta-item-icon">
         <i class="far fa-calendar-check"></i>
       </span>
       <span class="post-meta-item-text">更新于</span>
-      <time title="修改时间：2026-05-04 19:33:17" itemprop="dateModified" datetime="2026-05-04T19:33:17+00:00">2026-05-04</time>
+      <time title="修改时间：2026-05-04 20:36:02" itemprop="dateModified" datetime="2026-05-04T20:36:02+00:00">2026-05-04</time>
     </span>
 
   
@@ -227,17 +227,174 @@
     
     
     <div class="post-body" itemprop="articleBody">
-          <p>事情很简单：每天早上敲一个命令把开发环境拉起来。项目结构不复杂——一个 Kotlin 写的主后端，一个 Go 写的用户认证服务，前端是两个 Vite 项目，底下垫着 MongoDB、Redis、Elasticsearch、PostgreSQL 四个基础设施。加起来 8 个进程。</p>
-<p>我写了一个 <code>start-all.bat</code>，预期行为是：双击 → 等服务一个个亮绿灯 → 打开浏览器干活。</p>
-<p>结果实际行为是：有的服务随机消失，有的端口不通，前台报错信息指向和根因毫无关系。以下是在 Windows 10 + 16GB 内存上调试这 8 个进程启动问题的记录。</p>
-          <!--noindex-->
-            <div class="post-button">
-              <a class="btn" href="/2026/05/05/windows-dev-debugging/#more" rel="contents">
-                阅读全文 &raquo;
-              </a>
-            </div>
-          <!--/noindex-->
-        
+          <h1 id="Windows-开发环境连环坑：Gradle、IPv6、内存三板斧"><a href="#Windows-开发环境连环坑：Gradle、IPv6、内存三板斧" class="headerlink" title="Windows 开发环境连环坑：Gradle、IPv6、内存三板斧"></a>Windows 开发环境连环坑：Gradle、IPv6、内存三板斧</h1><blockquote>
+<p>一个全栈项目的 Windows 开发环境，8 个服务接连出问题。本文复盘整个排查链路，从”为什么 Gradle 随机挂”到”为什么 localhost 连不上 localhost”。</p>
+</blockquote>
+<h2 id="背景"><a href="#背景" class="headerlink" title="背景"></a>背景</h2><p>项目 dev 环境需要启动 8 个服务：</p>
+<table>
+<thead>
+<tr>
+<th>层</th>
+<th>服务</th>
+<th>端口</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>基础设施</td>
+<td>MongoDB, Redis, Elasticsearch, PostgreSQL</td>
+<td>27017, 6379, 9200, 5432</td>
+</tr>
+<tr>
+<td>后端</td>
+<td>Kotlin (Ktor&#x2F;Gradle), Go Auth</td>
+<td>8081, 8080</td>
+</tr>
+<tr>
+<td>前端</td>
+<td>Main (Vite), Auth (Vite)</td>
+<td>5173, 5174</td>
+</tr>
+</tbody></table>
+<p>用一台 Windows 10 工作站做本地开发，16GB 内存。启动脚本用 <code>start-all.bat</code>，依次拉起所有服务然后健康检查。</p>
+<h2 id="第一板斧：Kotlin-后端”起来就死”"><a href="#第一板斧：Kotlin-后端”起来就死”" class="headerlink" title="第一板斧：Kotlin 后端”起来就死”"></a>第一板斧：Kotlin 后端”起来就死”</h2><h3 id="症状"><a href="#症状" class="headerlink" title="症状"></a>症状</h3><p>Kotlin 后端是 Ktor + Gradle 项目，用 <code>gradle.bat run --no-daemon</code> 启动。日志显示：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">Application started in 1.341 seconds.</span><br><span class="line">Responding at http://127.0.0.1:8081</span><br></pre></td></tr></table></figure>
+
+<p>几秒后进程消失，端口 8081 不再监听。没有 crash dump，没有堆栈——安静地没了。</p>
+<h3 id="排查"><a href="#排查" class="headerlink" title="排查"></a>排查</h3><p>Gradle daemon 的日志在 <code>%USERPROFILE%\.gradle\daemon\8.8\daemon-*.out.log</code>。拉出来看最后几行：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">Application started successfully at 01:47:08</span><br><span class="line">thread 30: client disconnection detected, canceling the build</span><br></pre></td></tr></table></figure>
+
+<p>关键信息：<strong>client disconnection detected</strong>。Gradle 有两种进程模型：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">┌──────────────┐     start      ┌──────────────────┐</span><br><span class="line">│ gradle.bat   │ ────────────── │  Daemon JVM      │</span><br><span class="line">│ (client)     │     fork       │  (跑编译+应用)     │</span><br><span class="line">│ 64MB heap    │                │  可配 heap        │</span><br><span class="line">└──────────────┘                └──────────────────┘</span><br></pre></td></tr></table></figure>
+
+<ul>
+<li><strong>Daemon 模式</strong>（默认）：client 只是个薄壳，编译在 daemon JVM 里跑。client OOM 不太影响 daemon。</li>
+<li><strong><code>--no-daemon</code> 模式</strong>：所有东西挤在一个 JVM 里。而 <code>gradle.bat</code> 的 <code>DEFAULT_JVM_OPTS</code> 只有 <code>-Xmx64m</code>。</li>
+</ul>
+<p>64MB 跑 Kotlin 编译 + Ktor 应用？应用刚启动完，GC 一激进就 OOM，client 进程被 OS 杀掉。Daemon 检测到 client 连接断了 → “client disconnection detected, canceling the build” → 应用也被杀了。</p>
+<p>那为什么用 <code>--no-daemon</code>？因为 daemon 模式在嵌套的 <code>cmd /k</code> 窗口里也有问题——daemon 启动后会立即返回，<code>cmd /k</code> 窗口里只剩一个空 shell，用户看不到应用输出。</p>
+<h3 id="还有一层：JAVA-HOME-斜杠"><a href="#还有一层：JAVA-HOME-斜杠" class="headerlink" title="还有一层：JAVA_HOME 斜杠"></a>还有一层：JAVA_HOME 斜杠</h3><p>在排查过程中还撞上了另一个问题。某次重启后，Gradle 窗口报：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">ERROR: JAVA_HOME is set to an invalid directory:</span><br><span class="line">C:\Users\bennyli\auto-novel-env\jdk-17</span><br></pre></td></tr></table></figure>
+
+<p>但 JDK 的路径完全正确，<code>java.exe</code> 就在那。问题出在 <code>gradle.bat</code> 第 56 行：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">set JAVA_EXE=%JAVA_HOME%/bin/java.exe</span><br></pre></td></tr></table></figure>
+
+<p>注意这是 <strong><code>/</code></strong>，不是 Windows 的 <code>\</code>。<code>gradle.bat</code> 是 Gradle 发行版自带的跨平台脚本——它在 Linux&#x2F;macOS 用 <code>/</code>，但 Windows 版没改干净。</p>
+<p>纯 CMD 直接执行时 <code>if exist</code> 通常会容错通过。但嵌套在 <code>start &quot;...&quot; cmd /k &quot;...&quot;</code> 里时，CMD 的路径解析有时拒绝这个混用写法。<strong>这是 Gradle 8.8 发行版的 bug，不是项目代码的问题。</strong></p>
+<h3 id="解决"><a href="#解决" class="headerlink" title="解决"></a>解决</h3><p>绕开 <code>gradle.bat</code>，直接调 <code>java.exe</code>：</p>
+<figure class="highlight powershell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">java.exe <span class="literal">-Xmx512m</span> `</span><br><span class="line">  <span class="literal">-classpath</span> <span class="string">&quot;gradle\lib\gradle-launcher-8.8.jar&quot;</span> `</span><br><span class="line">  org.gradle.launcher.GradleMain run <span class="literal">--no-daemon</span></span><br></pre></td></tr></table></figure>
+
+<p>三个要点：</p>
+<ul>
+<li><code>-Xmx512m</code> 显式覆盖默认的 64MB</li>
+<li><code>--no-daemon</code> 一个 JVM 扛全部，512MB 足够</li>
+<li>不经过 <code>gradle.bat</code>，JAVA_HOME 斜杠问题不存在</li>
+</ul>
+<h2 id="第二板斧：Elasticsearch-吃掉一半内存"><a href="#第二板斧：Elasticsearch-吃掉一半内存" class="headerlink" title="第二板斧：Elasticsearch 吃掉一半内存"></a>第二板斧：Elasticsearch 吃掉一半内存</h2><h3 id="症状-1"><a href="#症状-1" class="headerlink" title="症状"></a>症状</h3><p>所有服务按 bat 脚本顺序启动后，任务管理器显示内存占用 7.5 GB，光 Elasticsearch 一个 <code>java.exe</code> 就占了 7 GB+。</p>
+<h3 id="排查-1"><a href="#排查-1" class="headerlink" title="排查"></a>排查</h3><p>Elasticsearch 自带的 JVM 堆自动计算逻辑：取系统内存的 50%。16GB 内存 → 自动分配约 7.7GB。而这台机器同时还要跑 MongoDB、PostgreSQL、另一个 JDK、两个 Node 进程、Go 编译……</p>
+<p>更糟的是，ES 在 Kotlin 之前启动。ES 的 JVM 刚吞掉 7GB，Kotlin 的 Gradle 又以 64MB 堆起跑——内存压力挤压了 Gradle client 的生存空间，让它更容易 OOM。</p>
+<h3 id="解决-1"><a href="#解决-1" class="headerlink" title="解决"></a>解决</h3><p>在 <code>elasticsearch/config/jvm.options.d/</code> 下新建 <code>heap.options</code>：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">-Xms512m</span><br><span class="line">-Xmx512m</span><br></pre></td></tr></table></figure>
+
+<p>ES 用于 dev 环境绰绰有余，512MB 能跑所有索引操作。</p>
+<h2 id="第三板斧：Go-连不上同一台机器上的-PostgreSQL"><a href="#第三板斧：Go-连不上同一台机器上的-PostgreSQL" class="headerlink" title="第三板斧：Go 连不上同一台机器上的 PostgreSQL"></a>第三板斧：Go 连不上同一台机器上的 PostgreSQL</h2><h3 id="症状-2"><a href="#症状-2" class="headerlink" title="症状"></a>症状</h3><p>Kotlin 后端稳定后，打开 Auth 前端 <code>http://localhost:5174</code> 登录。输入 admin &#x2F; admin123，页面提示：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">登录失败: [404] Not Found</span><br></pre></td></tr></table></figure>
+
+<p>排查后 404 是前端 body 缺少 <code>app</code> 字段。补上之后再试，变成：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">登录失败: [500] Internal Server Error</span><br></pre></td></tr></table></figure>
+
+<h3 id="排查-2"><a href="#排查-2" class="headerlink" title="排查"></a>排查</h3><p>直接 curl Go Auth API（端口 8080）：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">$ curl -X POST http://localhost:8080/v1/auth/login \</span><br><span class="line">  -d &#x27;&#123;&quot;app&quot;:&quot;auth&quot;,&quot;username&quot;:&quot;admin&quot;,&quot;password&quot;:&quot;admin123&quot;&#125;&#x27;</span><br><span class="line">查询用户失败</span><br></pre></td></tr></table></figure>
+
+<p>500 + “查询用户失败” → 说明路由命中、JSON 解析通过，但数据库查询挂了。</p>
+<p>Go Auth 的 <code>main.go</code> 读取环境变量：</p>
+<figure class="highlight go"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">db := infra.NewSqlDb(</span><br><span class="line">    env(<span class="string">&quot;DB_HOST&quot;</span>, <span class="string">&quot;localhost&quot;</span>),</span><br><span class="line">    envInt(<span class="string">&quot;DB_PORT&quot;</span>, <span class="number">4002</span>),     <span class="comment">// 默认 4002</span></span><br><span class="line">    env(<span class="string">&quot;DB_USER&quot;</span>, <span class="string">&quot;auth&quot;</span>),</span><br><span class="line">    env(<span class="string">&quot;DB_PASSWORD&quot;</span>, <span class="string">&quot;&quot;</span>),</span><br><span class="line">    env(<span class="string">&quot;DB_NAME&quot;</span>, <span class="string">&quot;auth&quot;</span>),</span><br><span class="line">)</span><br></pre></td></tr></table></figure>
+
+<p>查看 Go 进程的 stderr 日志，真正错误浮出水面：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br></pre></td><td class="code"><pre><span class="line">jet: dial tcp [::1]:4002: connectex: No connection could be made</span><br><span class="line">    because the target machine actively refused it.</span><br></pre></td></tr></table></figure>
+
+<p>两个问题：</p>
+<ol>
+<li><strong>端口错了</strong>：连的是 4002（代码默认值），不是 5432。<code>DB_PORT</code> 环境变量没传进去——bash 的 <code>set</code> 和 Windows CMD 的 <code>set</code> 是两回事。</li>
+<li><strong>走了 IPv6</strong>：<code>[::1]</code> 是 IPv6 的 localhost。</li>
+</ol>
+<p>修复端口后重试：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">jet: dial tcp [::1]:5432: connectex: ... refused.</span><br></pre></td></tr></table></figure>
+
+<p>端口对了，但 IPv6 (<code>[::1]</code>) 仍然被拒。用 psql 明确指定 <code>127.0.0.1</code> 测试：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br></pre></td><td class="code"><pre><span class="line">$ psql -h 127.0.0.1 -U auth -d auth -c &quot;SELECT username FROM auth_user;&quot;</span><br><span class="line"> username</span><br><span class="line">----------</span><br><span class="line"> admin</span><br><span class="line"> test_admin</span><br><span class="line"> ...</span><br><span class="line">(9 rows)</span><br></pre></td></tr></table></figure>
+
+<p>数据库好好的，<code>admin</code> 用户也在。问题窄化为：<strong>Go 的 <code>lib/pq</code> 驱动在 Windows 上用 <code>localhost</code> 解析时优先尝试 IPv6，被 pg_hba.conf 拒绝。</strong></p>
+<p>为什么 pg_hba.conf 拒绝 IPv6？PostgreSQL 默认的 <code>pg_hba.conf</code> 可能只配了 IPv4 的信任规则：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"># IPv4 local connections:</span><br><span class="line">host    all    all    127.0.0.1/32    trust</span><br><span class="line"># IPv6 可能没配，或被注释</span><br></pre></td></tr></table></figure>
+
+<h3 id="解决-2"><a href="#解决-2" class="headerlink" title="解决"></a>解决</h3><p>两处修改：</p>
+<p><strong>bat 脚本</strong>（CMD 语法）：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line">:: 之前</span><br><span class="line">set DB_HOST=localhost &amp;&amp; set RDB_HOST=localhost &amp;&amp; ...</span><br><span class="line"></span><br><span class="line">:: 之后</span><br><span class="line">set DB_HOST=127.0.0.1 &amp;&amp; set RDB_HOST=127.0.0.1 &amp;&amp; ...</span><br></pre></td></tr></table></figure>
+
+<p><strong>新建 ps1 脚本</strong>（PowerShell），彻底告别 CMD 的环境变量坑：</p>
+<figure class="highlight powershell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br></pre></td><td class="code"><pre><span class="line"><span class="variable">$env:DB_HOST</span> = <span class="string">&quot;127.0.0.1&quot;</span></span><br><span class="line"><span class="variable">$env:DB_PORT</span> = <span class="string">&quot;5432&quot;</span></span><br><span class="line"><span class="variable">$env:RDB_HOST</span> = <span class="string">&quot;127.0.0.1&quot;</span></span><br><span class="line">...</span><br><span class="line"><span class="built_in">Start-Process</span> <span class="literal">-FilePath</span> <span class="string">&quot;go&quot;</span> <span class="literal">-ArgumentList</span> <span class="string">&quot;run&quot;</span>, <span class="string">&quot;.&quot;</span> <span class="literal">-WorkingDirectory</span> <span class="string">&quot;<span class="variable">$AUTH_DIR</span>\api&quot;</span></span><br></pre></td></tr></table></figure>
+
+<p><code>127.0.0.1</code> 强制 IPv4，Go 驱动直接走 TCPv4，无需 DNS 解析。</p>
+<h2 id="总结：三板斧的根因关系"><a href="#总结：三板斧的根因关系" class="headerlink" title="总结：三板斧的根因关系"></a>总结：三板斧的根因关系</h2><p>这三件事不是孤立的——它们互相放大：</p>
+<figure class="highlight plaintext"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line">ES 堆 7.4GB (50% 内存)</span><br><span class="line">        │</span><br><span class="line">        ▼</span><br><span class="line">   系统内存吃紧</span><br><span class="line">        │</span><br><span class="line">        ▼</span><br><span class="line">Gradle client 64MB 堆 ──── OOM 被 OS 杀 ──── daemon 检测断开 ──── 取消构建</span><br><span class="line">        │</span><br><span class="line">        ▼</span><br><span class="line">   应用进程消失（无 crash 日志）</span><br></pre></td></tr></table></figure>
+
+<p>而 IPv6 问题是另一条线——和内存无关，但同样”症状不指向根因”。404 → 500 → “查询用户失败” → 实际是网络层连不上，几层中间件都没有自己的日志能说明问题。</p>
+<p>三点教训：</p>
+<ol>
+<li><strong><code>--no-daemon</code> 时检查 JVM 堆大小</strong>。Gradle 默认 <code>-Xmx64m</code> 只够转发输出，不够同时编译和运行。</li>
+<li><strong>Windows 上 <code>localhost</code> 不等于 <code>127.0.0.1</code></strong>。localhost 可能解析成 IPv6 <code>::1</code>，而很多 Windows 服务默认只配了 IPv4。</li>
+<li><strong>内存问题不单点看</strong>。单个服务的内存配置看起来都没问题，但叠加起来（ES 7GB + Kotlin 编译 512MB + MongoDB + PG + Redis + 两个 Node + Go）就把一台 16GB 机器吃满了。</li>
+</ol>
+<h2 id="第四板斧：CMD-环境变量不可靠，bat-改-ps1"><a href="#第四板斧：CMD-环境变量不可靠，bat-改-ps1" class="headerlink" title="第四板斧：CMD 环境变量不可靠，bat 改 ps1"></a>第四板斧：CMD 环境变量不可靠，bat 改 ps1</h2><h3 id="问题已修好，为什么还要折腾？"><a href="#问题已修好，为什么还要折腾？" class="headerlink" title="问题已修好，为什么还要折腾？"></a>问题已修好，为什么还要折腾？</h3><p>前面三板斧砍完后 bat 脚本能工作了——所有 8 个服务都能启动。但重跑了几次发现：</p>
+<ul>
+<li><strong>偶发性 <code>DB_PORT</code> 不生效</strong>。代码里读到的是 4002（默认值），不是 5432。</li>
+<li><strong><code>Read-Host</code> 在后台&#x2F;非交互式 PowerShell 里抛异常</strong>，脚本最后一行挂了。</li>
+<li><strong>PS 5.1 的 <code>Start-Process</code> 找不到 <code>.cmd</code> 文件</strong>（<code>npx</code>、<code>pnpm</code>），前端 dev server 启不来。</li>
+<li><strong><code>2&gt;$null</code> 对原生命令可能阻塞管道</strong>。PowerShell 给原生 exe 做 stderr 重定向时会创建一个隐藏的后台管道——如果 exe 输出时序不对，脚本就会在 <code>&amp;</code> 调用后卡住。</li>
+<li><strong>CMD 和 bash 的 <code>set</code> 不互通</strong>。排查时用 bash 设 <code>set DB_PORT=5432</code> 是空操作，浪费了一次排查回合。</li>
+</ul>
+<h3 id="关键差异"><a href="#关键差异" class="headerlink" title="关键差异"></a>关键差异</h3><table>
+<thead>
+<tr>
+<th>问题</th>
+<th>bat (CMD)</th>
+<th>ps1 (PowerShell)</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>环境变量</td>
+<td><code>set VAR=val &amp;&amp; cmd</code> — cmd &#x2F;c 嵌套层级不确定时可能丢</td>
+<td><code>$env:VAR = &quot;val&quot;</code> — 进程级设置，<code>Start-Process</code> 子进程继承</td>
+</tr>
+<tr>
+<td>原生 exe 管道</td>
+<td><code>2&gt;nul</code> 直连 console，不阻塞</td>
+<td><code>2&gt;$null</code> 创建隐藏管道，某些 exe 会卡住</td>
+</tr>
+<tr>
+<td>找到 .cmd</td>
+<td>CMD 自动找同名 <code>.cmd</code>&#x2F;<code>.bat</code></td>
+<td>PS 5.1 的 <code>Start-Process</code> 只认 <code>.exe</code>，必须写完整路径</td>
+</tr>
+<tr>
+<td>路径分隔符</td>
+<td><code>\</code> 和 <code>/</code> 混用（gradle.bat 遗留）</td>
+<td>统一 <code>\</code>，不混用</td>
+</tr>
+<tr>
+<td>后台&#x2F;非交互</td>
+<td><code>pause</code> 没问题</td>
+<td><code>Read-Host</code> 在 NonInteractive 模式抛异常</td>
+</tr>
+</tbody></table>
+<h3 id="最终-ps1-方案"><a href="#最终-ps1-方案" class="headerlink" title="最终 ps1 方案"></a>最终 ps1 方案</h3><figure class="highlight powershell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br></pre></td><td class="code"><pre><span class="line"><span class="comment"># 全部用完整路径，消除 PATH 歧义</span></span><br><span class="line"><span class="built_in">Start-Process</span> <span class="literal">-FilePath</span> <span class="string">&quot;C:\Program Files\Go\bin\go.exe&quot;</span> ...</span><br><span class="line"><span class="built_in">Start-Process</span> <span class="literal">-FilePath</span> <span class="string">&quot;C:\Program Files\nodejs\npx.cmd&quot;</span> ...</span><br><span class="line"><span class="built_in">Start-Process</span> <span class="literal">-FilePath</span> <span class="string">&quot;C:\Users\bennyli\AppData\Roaming\npm\pnpm.cmd&quot;</span> ...</span><br><span class="line"></span><br><span class="line"><span class="comment"># 环境变量在 Start-Process 前设置，子进程自动继承</span></span><br><span class="line"><span class="variable">$env:DB_HOST</span> = <span class="string">&quot;127.0.0.1&quot;</span>    <span class="comment"># 强制 IPv4</span></span><br><span class="line"><span class="variable">$env:DB_PORT</span> = <span class="string">&quot;5432&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 原生命令用 $ErrorActionPreference 替代 2&gt;$null</span></span><br><span class="line"><span class="variable">$ErrorActionPreference</span> = <span class="string">&quot;SilentlyContinue&quot;</span></span><br><span class="line">&amp; pg_ctl.exe <span class="built_in">start</span></span><br><span class="line"><span class="variable">$ErrorActionPreference</span> = <span class="string">&quot;Continue&quot;</span></span><br><span class="line"></span><br><span class="line"><span class="comment"># 交互式等待加 try/catch</span></span><br><span class="line"><span class="keyword">try</span> &#123; <span class="built_in">Read-Host</span> &#125; <span class="keyword">catch</span> &#123;&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="教训"><a href="#教训" class="headerlink" title="教训"></a>教训</h3><ol start="4">
+<li><strong>Windows 上启动脚本用 PowerShell，不用 CMD</strong>。环境变量传递明确、管道行为可预测、错误处理更灵活。CMD 的嵌套 <code>start</code>&#x2F;<code>cmd /k</code>&#x2F;<code>cmd /c</code> 组合在复杂启动场景下不够可靠。</li>
+<li><strong>用完整路径而不是依赖 PATH</strong>。<code>Start-Process</code> 在 PS 5.1 里不自动补全扩展名，<code>npx.cmd</code> 和 <code>npx</code> 是两回事。</li>
+<li><strong><code>2&gt;$null</code> 不是 <code>2&gt;nul</code> 的等价物</strong>。PowerShell 对原生 exe 的 stderr 重定向是通过后台管道实现的，和 CMD 的直接 console 重定向机制不同，可能引入阻塞。</li>
+</ol>
+
       
     </div>
 
@@ -299,7 +456,7 @@
         <i class="far fa-calendar-check"></i>
       </span>
       <span class="post-meta-item-text">更新于</span>
-      <time title="修改时间：2026-05-04 19:33:17" itemprop="dateModified" datetime="2026-05-04T19:33:17+00:00">2026-05-04</time>
+      <time title="修改时间：2026-05-04 20:36:02" itemprop="dateModified" datetime="2026-05-04T20:36:02+00:00">2026-05-04</time>
     </span>
 
   
